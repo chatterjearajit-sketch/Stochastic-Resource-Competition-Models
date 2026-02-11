@@ -1,0 +1,897 @@
+"""
+MODULAR SIMULATIONS FOR STOCHASTIC TILLMAN MODEL
+=================================================
+
+Each section is INDEPENDENT and can be run separately in Google Colab.
+Simply run the cells you want, in any order.
+
+Authors: Jashan Bhinder, Rajit Chatterjea
+"""
+
+# ============================================================================
+# CELL 1: SETUP (Run this first, then choose any simulation below)
+# ============================================================================
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.integrate import odeint
+from tqdm.notebook import tqdm
+import warnings
+warnings.filterwarnings('ignore')
+
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+np.random.seed(42)
+
+print("✓ Setup complete! Now run any simulation below.")
+print("="*70)
+
+# ============================================================================
+# CORE CLASSES (Include in setup)
+# ============================================================================
+
+class StochasticTillman:
+    """Stochastic Tillman model with multiple numerical methods"""
+    
+    def __init__(self, r=1.0, K=100.0, q=0.1, H=10.0, m=0.2, 
+                 sigma=0.1, eta=0.05):
+        self.r = r
+        self.K = K
+        self.q = q
+        self.H = H
+        self.m = m
+        self.sigma = sigma
+        self.eta = eta
+        
+    def f_response(self, R):
+        return R / (self.H + R)
+    
+    def milstein(self, N0, R0, T, dt):
+        """Milstein scheme with O(dt) convergence"""
+        n_steps = int(T / dt)
+        t = np.linspace(0, T, n_steps)
+        N, R = np.zeros(n_steps), np.zeros(n_steps)
+        N[0], R[0] = N0, R0
+        
+        sqrt_dt = np.sqrt(dt)
+        
+        for i in range(n_steps - 1):
+            dW_N = sqrt_dt * np.random.randn()
+            dW_R = sqrt_dt * np.random.randn()
+            
+            drift_N = N[i] * (self.f_response(R[i]) - self.m)
+            drift_R = self.r * R[i] * (1 - R[i]/self.K) - \
+                     self.q * self.f_response(R[i]) * N[i]
+            
+            mil_N = 0.5 * self.sigma * N[i] * self.sigma * (dW_N**2 - dt)
+            mil_R = 0.5 * self.eta * R[i] * self.eta * (dW_R**2 - dt)
+            
+            N[i+1] = N[i] + drift_N * dt + self.sigma * N[i] * dW_N + mil_N
+            R[i+1] = R[i] + drift_R * dt + self.eta * R[i] * dW_R + mil_R
+            
+            N[i+1] = max(N[i+1], 0)
+            R[i+1] = max(R[i+1], 0)
+            
+        return t, N, R
+    
+    def euler_maruyama(self, N0, R0, T, dt):
+        """Euler-Maruyama scheme"""
+        n_steps = int(T / dt)
+        t = np.linspace(0, T, n_steps)
+        N, R = np.zeros(n_steps), np.zeros(n_steps)
+        N[0], R[0] = N0, R0
+        
+        sqrt_dt = np.sqrt(dt)
+        
+        for i in range(n_steps - 1):
+            dW_N = sqrt_dt * np.random.randn()
+            dW_R = sqrt_dt * np.random.randn()
+            
+            N[i+1] = N[i] + N[i] * (self.f_response(R[i]) - self.m) * dt + \
+                     self.sigma * N[i] * dW_N
+            R[i+1] = R[i] + (self.r * R[i] * (1 - R[i]/self.K) - \
+                     self.q * self.f_response(R[i]) * N[i]) * dt + \
+                     self.eta * R[i] * dW_R
+            
+            N[i+1] = max(N[i+1], 0)
+            R[i+1] = max(R[i+1], 0)
+            
+        return t, N, R
+
+
+def deterministic_ode(y, t, r, K, q, H, m):
+    """Deterministic Tillman ODE"""
+    N, R = y
+    dN = N * (R/(H+R) - m)
+    dR = r * R * (1 - R/K) - q * (R/(H+R)) * N
+    return [dN, dR]
+
+
+print("✓ Core classes loaded")
+print("="*70)
+
+
+# ============================================================================
+# SIMULATION 1: QUICK DEMO - Single Trajectory
+# Runtime: ~30 seconds
+# ============================================================================
+
+def simulation_1_demo():
+    """
+    Quick demonstration: Compare deterministic vs stochastic trajectory
+    
+    Runtime: ~30 seconds
+    Output: 1 figure with 2 subplots
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 1: Quick Demo - Single Trajectory")
+    print("="*70)
+    
+    # Parameters
+    sigma = 0.15
+    T = 500
+    
+    # Stochastic trajectory
+    print("Running stochastic simulation...")
+    model = StochasticTillman(sigma=sigma)
+    t_stoch, N_stoch, R_stoch = model.milstein(N0=50, R0=50, T=T, dt=0.01)
+    
+    # Deterministic trajectory
+    print("Running deterministic simulation...")
+    params = (1.0, 100.0, 0.1, 10.0, 0.2)
+    y0 = [50, 50]
+    t_det = np.linspace(0, T, 1000)
+    sol = odeint(deterministic_ode, y0, t_det, args=params)
+    
+    # Plot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    axes[0].plot(t_det, sol[:, 0], 'k-', linewidth=2, label='Deterministic')
+    axes[0].plot(t_stoch, N_stoch, 'b-', linewidth=1.5, alpha=0.7, 
+                 label=f'Stochastic (σ={sigma})')
+    axes[0].set_xlabel('Time', fontsize=12)
+    axes[0].set_ylabel('Population N(t)', fontsize=12)
+    axes[0].set_title('Population Dynamics', fontweight='bold', fontsize=14)
+    axes[0].legend(fontsize=11)
+    axes[0].grid(True, alpha=0.3)
+    
+    axes[1].plot(t_det, sol[:, 1], 'k-', linewidth=2, label='Deterministic')
+    axes[1].plot(t_stoch, R_stoch, 'r-', linewidth=1.5, alpha=0.7, 
+                 label=f'Stochastic (σ={sigma})')
+    axes[1].set_xlabel('Time', fontsize=12)
+    axes[1].set_ylabel('Resource R(t)', fontsize=12)
+    axes[1].set_title('Resource Dynamics', fontweight='bold', fontsize=14)
+    axes[1].legend(fontsize=11)
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim1_demo_trajectory.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"Final values:")
+    print(f"  Stochastic: N={N_stoch[-1]:.2f}, R={R_stoch[-1]:.2f}")
+    print(f"  Deterministic: N={sol[-1,0]:.2f}, R={sol[-1,1]:.2f}")
+    print(f"\nSaved: sim1_demo_trajectory.png")
+
+
+# ============================================================================
+# SIMULATION 2: ENSEMBLE STATISTICS
+# Runtime: ~2-3 minutes
+# ============================================================================
+
+def simulation_2_ensemble(n_trajectories=100, T=300, sigma=0.15):
+    """
+    Ensemble statistics: Run multiple trajectories and compute mean/variance
+    
+    Parameters:
+    -----------
+    n_trajectories : int (default=100) - number of realizations
+    T : float (default=300) - simulation time
+    sigma : float (default=0.15) - noise intensity
+    
+    Runtime: ~2-3 minutes for 100 trajectories
+    Output: 1 figure showing ensemble statistics
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 2: Ensemble Statistics")
+    print("="*70)
+    print(f"Parameters: n={n_trajectories}, T={T}, σ={sigma}")
+    
+    model = StochasticTillman(sigma=sigma)
+    dt = 0.01
+    n_steps = int(T / dt)
+    N_ensemble = np.zeros((n_trajectories, n_steps))
+    
+    print(f"\nRunning {n_trajectories} trajectories...")
+    for i in tqdm(range(n_trajectories)):
+        t, N, R = model.milstein(50, 50, T, dt)
+        N_ensemble[i, :] = N
+    
+    # Statistics
+    mean_N = np.mean(N_ensemble, axis=0)
+    std_N = np.std(N_ensemble, axis=0)
+    q25 = np.percentile(N_ensemble, 25, axis=0)
+    q75 = np.percentile(N_ensemble, 75, axis=0)
+    
+    # Deterministic comparison
+    params = (1.0, 100.0, 0.1, 10.0, 0.2)
+    sol = odeint(deterministic_ode, [50, 50], t, args=params)
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # Sample trajectories (first 10)
+    for i in range(min(10, n_trajectories)):
+        ax.plot(t, N_ensemble[i, :], alpha=0.2, color='gray', linewidth=0.5)
+    
+    ax.plot(t, mean_N, 'b-', linewidth=3, label='Mean', zorder=10)
+    ax.fill_between(t, mean_N - std_N, mean_N + std_N,
+                     alpha=0.3, color='blue', label='±1 SD')
+    ax.fill_between(t, q25, q75, alpha=0.2, color='cyan', label='IQR (25-75%)')
+    ax.plot(t, sol[:, 0], 'k--', linewidth=2.5, label='Deterministic', zorder=10)
+    
+    ax.set_xlabel('Time', fontsize=12)
+    ax.set_ylabel('Population N(t)', fontsize=12)
+    ax.set_title(f'Ensemble Statistics ({n_trajectories} realizations, σ={sigma})', 
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11, loc='best')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim2_ensemble_statistics.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"Final mean ± SD: {mean_N[-1]:.2f} ± {std_N[-1]:.2f}")
+    print(f"Coefficient of variation: {std_N[-1]/mean_N[-1]:.3f}")
+    print(f"\nSaved: sim2_ensemble_statistics.png")
+
+
+# ============================================================================
+# SIMULATION 3: EXTINCTION PROBABILITY vs NOISE
+# Runtime: ~3-5 minutes
+# ============================================================================
+
+def simulation_3_extinction(n_sigma=10, n_trajectories=500, T=500):
+    """
+    Extinction probability as a function of noise intensity
+    
+    Parameters:
+    -----------
+    n_sigma : int (default=10) - number of noise levels to test
+    n_trajectories : int (default=500) - trajectories per noise level
+    T : float (default=500) - simulation time
+    
+    Runtime: ~3-5 minutes
+    Output: 1 figure showing extinction probability curve
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 3: Extinction Probability Analysis")
+    print("="*70)
+    print(f"Testing {n_sigma} noise levels with {n_trajectories} trajectories each")
+    
+    sigma_vals = np.linspace(0.05, 0.5, n_sigma)
+    ext_probs = []
+    mean_ext_times = []
+    
+    for sigma in tqdm(sigma_vals, desc="Testing noise levels"):
+        model = StochasticTillman(sigma=sigma)
+        extinctions = 0
+        ext_times = []
+        
+        for _ in range(n_trajectories):
+            t, N, R = model.milstein(50, 50, T, dt=0.01)
+            
+            # Check for extinction
+            extinct_idx = np.where(N < 1)[0]
+            if len(extinct_idx) > 0:
+                extinctions += 1
+                ext_times.append(t[extinct_idx[0]])
+        
+        ext_probs.append(extinctions / n_trajectories)
+        mean_ext_times.append(np.mean(ext_times) if ext_times else np.inf)
+    
+    ext_probs = np.array(ext_probs)
+    
+    # Plot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Extinction probability
+    axes[0].plot(sigma_vals, ext_probs, 'o-', linewidth=2.5, 
+                 markersize=8, color='red', label='Empirical')
+    axes[0].axhline(0.5, linestyle='--', color='gray', alpha=0.5, 
+                    linewidth=2, label='50% threshold')
+    axes[0].set_xlabel('Noise Intensity (σ)', fontsize=12)
+    axes[0].set_ylabel('Extinction Probability', fontsize=12)
+    axes[0].set_title('Extinction Risk vs Environmental Noise', 
+                      fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=11)
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim(-0.05, 1.05)
+    
+    # Mean extinction time
+    finite_times = [t for t in mean_ext_times if np.isfinite(t)]
+    finite_sigma = sigma_vals[:len(finite_times)]
+    
+    if finite_times:
+        axes[1].semilogy(finite_sigma, finite_times, 's-', linewidth=2.5,
+                         markersize=8, color='blue')
+        axes[1].set_xlabel('Noise Intensity (σ)', fontsize=12)
+        axes[1].set_ylabel('Mean Time to Extinction', fontsize=12)
+        axes[1].set_title('Extinction Time Scale', fontsize=14, fontweight='bold')
+        axes[1].grid(True, alpha=0.3, which='both')
+    
+    plt.tight_layout()
+    plt.savefig('sim3_extinction_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Find critical threshold
+    if np.any(ext_probs > 0.4) and np.any(ext_probs < 0.6):
+        critical_idx = np.argmin(np.abs(ext_probs - 0.5))
+        critical_sigma = sigma_vals[critical_idx]
+        print(f"\n✓ Simulation complete!")
+        print(f"Critical noise level (50% extinction): σ ≈ {critical_sigma:.3f}")
+    else:
+        print(f"\n✓ Simulation complete!")
+        print(f"No critical threshold in tested range")
+    
+    print(f"\nSaved: sim3_extinction_analysis.png")
+
+
+# ============================================================================
+# SIMULATION 4: MOMENT EVOLUTION (Multiple Noise Levels)
+# Runtime: ~5-8 minutes
+# ============================================================================
+
+def simulation_4_moments(sigma_values=[0.05, 0.1, 0.2, 0.3], 
+                         n_trajectories=1000, T=300):
+    """
+    Track mean and variance evolution for different noise levels
+    
+    Parameters:
+    -----------
+    sigma_values : list (default=[0.05, 0.1, 0.2, 0.3]) - noise levels to test
+    n_trajectories : int (default=1000) - ensemble size
+    T : float (default=300) - simulation time
+    
+    Runtime: ~5-8 minutes
+    Output: 1 figure with 4 subplots
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 4: Moment Evolution Analysis")
+    print("="*70)
+    print(f"Testing {len(sigma_values)} noise levels with {n_trajectories} trajectories each")
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    dt = 0.01
+    
+    for sigma in sigma_values:
+        print(f"\nProcessing σ = {sigma:.3f}...")
+        model = StochasticTillman(sigma=sigma)
+        
+        n_steps = int(T / dt)
+        N_ensemble = np.zeros((n_trajectories, n_steps))
+        
+        for i in tqdm(range(n_trajectories), desc=f"σ={sigma}"):
+            t, N, R = model.milstein(50, 50, T, dt)
+            N_ensemble[i, :] = N
+        
+        # Compute moments
+        mean_N = np.mean(N_ensemble, axis=0)
+        var_N = np.var(N_ensemble, axis=0)
+        cv = np.sqrt(var_N) / (mean_N + 1e-10)
+        
+        # Plot
+        axes[0, 0].plot(t, mean_N, linewidth=2, label=f'σ={sigma:.2f}')
+        axes[0, 1].plot(t, var_N, linewidth=2, label=f'σ={sigma:.2f}')
+        axes[1, 0].plot(t, cv, linewidth=2, label=f'σ={sigma:.2f}')
+        
+        # Sample trajectory
+        sample_idx = np.random.randint(0, n_trajectories)
+        axes[1, 1].plot(t, N_ensemble[sample_idx, :], 
+                       linewidth=1.5, alpha=0.7, label=f'σ={sigma:.2f}')
+    
+    # Format plots
+    axes[0, 0].set_xlabel('Time', fontsize=11)
+    axes[0, 0].set_ylabel('E[N(t)]', fontsize=11)
+    axes[0, 0].set_title('Mean Population', fontweight='bold', fontsize=12)
+    axes[0, 0].legend(fontsize=10)
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    axes[0, 1].set_xlabel('Time', fontsize=11)
+    axes[0, 1].set_ylabel('Var[N(t)]', fontsize=11)
+    axes[0, 1].set_title('Population Variance', fontweight='bold', fontsize=12)
+    axes[0, 1].legend(fontsize=10)
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    axes[1, 0].set_xlabel('Time', fontsize=11)
+    axes[1, 0].set_ylabel('CV[N(t)]', fontsize=11)
+    axes[1, 0].set_title('Coefficient of Variation', fontweight='bold', fontsize=12)
+    axes[1, 0].legend(fontsize=10)
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    axes[1, 1].set_xlabel('Time', fontsize=11)
+    axes[1, 1].set_ylabel('N(t)', fontsize=11)
+    axes[1, 1].set_title('Sample Trajectories', fontweight='bold', fontsize=12)
+    axes[1, 1].legend(fontsize=10)
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim4_moment_evolution.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"\nSaved: sim4_moment_evolution.png")
+
+
+# ============================================================================
+# SIMULATION 5: TWO-SPECIES COMPETITION
+# Runtime: ~2-3 minutes
+# ============================================================================
+
+def simulation_5_two_species(n_trajectories=5, T=1500, sigma=0.15, rho=0.3):
+    """
+    Two-species competition with correlated environmental noise
+    
+    Parameters:
+    -----------
+    n_trajectories : int (default=5) - number of trajectories to plot
+    T : float (default=1500) - simulation time
+    sigma : float (default=0.15) - noise intensity
+    rho : float (default=0.3) - noise correlation (-1 to 1)
+    
+    Runtime: ~2-3 minutes
+    Output: 1 figure with time series and phase portrait
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 5: Two-Species Competition")
+    print("="*70)
+    print(f"Parameters: n={n_trajectories}, T={T}, σ={sigma}, ρ={rho}")
+    
+    # Two-species model
+    class TwoSpecies:
+        def __init__(self, H1=5, H2=15, sigma1=0.15, sigma2=0.15, rho=0.3):
+            self.H1, self.H2 = H1, H2
+            self.m1, self.m2 = 0.1, 0.1
+            self.sigma1, self.sigma2 = sigma1, sigma2
+            self.rho = rho
+            self.r, self.K = 1.0, 200.0
+            self.q1, self.q2 = 0.05, 0.05
+        
+        def simulate(self, N1_0, N2_0, R0, T, dt):
+            n_steps = int(T / dt)
+            t = np.linspace(0, T, n_steps)
+            N1, N2, R = np.zeros(n_steps), np.zeros(n_steps), np.zeros(n_steps)
+            N1[0], N2[0], R[0] = N1_0, N2_0, R0
+            
+            sqrt_dt = np.sqrt(dt)
+            
+            for i in range(n_steps - 1):
+                W1 = np.random.randn()
+                W2 = self.rho * W1 + np.sqrt(1 - self.rho**2) * np.random.randn()
+                W_R = np.random.randn()
+                
+                f1 = R[i] / (self.H1 + R[i])
+                f2 = R[i] / (self.H2 + R[i])
+                
+                N1[i+1] = N1[i] + N1[i] * (f1 - self.m1) * dt + \
+                         self.sigma1 * N1[i] * sqrt_dt * W1
+                N2[i+1] = N2[i] + N2[i] * (f2 - self.m2) * dt + \
+                         self.sigma2 * N2[i] * sqrt_dt * W2
+                R[i+1] = R[i] + (self.r * R[i] * (1 - R[i]/self.K) - \
+                        self.q1 * f1 * N1[i] - self.q2 * f2 * N2[i]) * dt
+                
+                N1[i+1] = max(N1[i+1], 0)
+                N2[i+1] = max(N2[i+1], 0)
+                R[i+1] = max(R[i+1], 0)
+            
+            return t, N1, N2, R
+    
+    model = TwoSpecies(sigma1=sigma, sigma2=sigma, rho=rho)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    print(f"\nRunning {n_trajectories} trajectories...")
+    for i in tqdm(range(n_trajectories)):
+        t, N1, N2, R = model.simulate(30, 30, 100, T=T, dt=0.01)
+        
+        # Time series
+        axes[0].plot(t, N1, linewidth=1.5, alpha=0.7, label=f'Sp1 (run {i+1})')
+        axes[0].plot(t, N2, '--', linewidth=1.5, alpha=0.7, label=f'Sp2 (run {i+1})')
+        
+        # Phase portrait
+        axes[1].plot(N1, N2, linewidth=1.5, alpha=0.7)
+        axes[1].plot(N1[0], N2[0], 'go', markersize=10)
+        axes[1].plot(N1[-1], N2[-1], 'ro', markersize=10)
+    
+    # Format
+    axes[0].set_xlabel('Time', fontsize=12)
+    axes[0].set_ylabel('Population', fontsize=12)
+    axes[0].set_title(f'Time Series (σ={sigma}, ρ={rho})', 
+                      fontweight='bold', fontsize=13)
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend(fontsize=9, ncol=2)
+    
+    axes[1].set_xlabel('Species 1 (N₁)', fontsize=12)
+    axes[1].set_ylabel('Species 2 (N₂)', fontsize=12)
+    axes[1].set_title('Phase Portrait', fontweight='bold', fontsize=13)
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim5_two_species.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"Final populations: N1={N1[-1]:.2f}, N2={N2[-1]:.2f}")
+    print(f"\nSaved: sim5_two_species.png")
+
+
+# ============================================================================
+# SIMULATION 6: CONVERGENCE ANALYSIS (Euler-Maruyama vs Milstein)
+# Runtime: ~4-6 minutes
+# ============================================================================
+
+def simulation_6_convergence(n_dt_values=6, n_realizations=50):
+    """
+    Test convergence rates of numerical schemes
+    
+    Parameters:
+    -----------
+    n_dt_values : int (default=6) - number of step sizes to test
+    n_realizations : int (default=50) - realizations per step size
+    
+    Runtime: ~4-6 minutes
+    Output: 1 convergence plot
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 6: Convergence Rate Analysis")
+    print("="*70)
+    print(f"Testing {n_dt_values} step sizes with {n_realizations} realizations each")
+    
+    # Reference solution
+    print("\nGenerating reference solution (very fine dt)...")
+    np.random.seed(123)
+    model_ref = StochasticTillman(sigma=0.2)
+    t_ref, N_ref, R_ref = model_ref.milstein(50, 50, T=10, dt=1e-5)
+    
+    # Test step sizes
+    dt_values = np.array([0.1, 0.05, 0.02, 0.01, 0.005, 0.002])[:n_dt_values]
+    
+    errors_EM = []
+    errors_Milstein = []
+    
+    for dt in tqdm(dt_values, desc="Testing step sizes"):
+        errors_em_temp = []
+        errors_mil_temp = []
+        
+        for _ in range(n_realizations):
+            np.random.seed(123)
+            
+            # Euler-Maruyama
+            model_em = StochasticTillman(sigma=0.2)
+            t_em, N_em, R_em = model_em.euler_maruyama(50, 50, T=10, dt=dt)
+            
+            # Milstein
+            np.random.seed(123)
+            model_mil = StochasticTillman(sigma=0.2)
+            t_mil, N_mil, R_mil = model_mil.milstein(50, 50, T=10, dt=dt)
+            
+            # Interpolate and compute errors
+            N_em_interp = np.interp(t_ref, t_em, N_em)
+            N_mil_interp = np.interp(t_ref, t_mil, N_mil)
+            
+            error_em = np.max(np.abs(N_em_interp - N_ref))
+            error_mil = np.max(np.abs(N_mil_interp - N_ref))
+            
+            errors_em_temp.append(error_em)
+            errors_mil_temp.append(error_mil)
+        
+        errors_EM.append(np.mean(errors_em_temp))
+        errors_Milstein.append(np.mean(errors_mil_temp))
+    
+    errors_EM = np.array(errors_EM)
+    errors_Milstein = np.array(errors_Milstein)
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    ax.loglog(dt_values, errors_EM, 'o-', linewidth=2.5, markersize=10,
+              label='Euler-Maruyama', color='blue')
+    ax.loglog(dt_values, errors_Milstein, 's-', linewidth=2.5, markersize=10,
+              label='Milstein', color='red')
+    
+    # Theoretical slopes
+    ax.loglog(dt_values, 10 * np.sqrt(dt_values), '--', 
+              label='O(√Δt) reference', color='blue', alpha=0.5, linewidth=2)
+    ax.loglog(dt_values, 10 * dt_values, '--',
+              label='O(Δt) reference', color='red', alpha=0.5, linewidth=2)
+    
+    ax.set_xlabel('Step Size (Δt)', fontsize=12)
+    ax.set_ylabel('Strong Error', fontsize=12)
+    ax.set_title('Convergence Rate Comparison', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11, loc='best')
+    ax.grid(True, which='both', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim6_convergence.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Estimate slopes
+    coeffs_em = np.polyfit(np.log(dt_values), np.log(errors_EM), 1)
+    coeffs_mil = np.polyfit(np.log(dt_values), np.log(errors_Milstein), 1)
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"\nConvergence rates:")
+    print(f"  Euler-Maruyama: O(Δt^{coeffs_em[0]:.2f}) [Expected: ~0.50]")
+    print(f"  Milstein: O(Δt^{coeffs_mil[0]:.2f}) [Expected: ~1.00]")
+    print(f"\nFinal errors (smallest dt):")
+    print(f"  EM: {errors_EM[-1]:.6f}")
+    print(f"  Milstein: {errors_Milstein[-1]:.6f}")
+    print(f"\nSaved: sim6_convergence.png")
+
+
+# ============================================================================
+# SIMULATION 7: SPATIAL STOCHASTIC SIMULATION (1D SPDE)
+# Runtime: ~8-12 minutes
+# ============================================================================
+
+def simulation_7_spatial(Nx=256, T=50, D=0.5):
+    """
+    1D spatial simulation with diffusion and stochastic noise
+    
+    Parameters:
+    -----------
+    Nx : int (default=256) - number of spatial grid points
+    T : float (default=50) - simulation time
+    D : float (default=0.5) - diffusion coefficient
+    
+    Runtime: ~8-12 minutes
+    Output: 2 figures (spatiotemporal evolution + spatial average)
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 7: Spatial Stochastic Simulation (1D SPDE)")
+    print("="*70)
+    print(f"Parameters: Nx={Nx}, T={T}, D={D}")
+    
+    class SpatialModel:
+        def __init__(self, L=100, Nx=256, D=0.5):
+            self.L = L
+            self.Nx = Nx
+            self.dx = L / Nx
+            self.D = D
+            self.r, self.K = 1.0, 100.0
+            self.q, self.H, self.m = 0.1, 10.0, 0.2
+            self.sigma = 0.1
+            self.x = np.linspace(0, L, Nx)
+        
+        def simulate(self, N0_func, R0_func, T, dt):
+            nt = int(T / dt)
+            N = np.zeros((nt, self.Nx))
+            R = np.zeros((nt, self.Nx))
+            
+            N[0, :] = N0_func(self.x)
+            R[0, :] = R0_func(self.x)
+            
+            D_matrix = self.D / (self.dx**2)
+            sqrt_dt = np.sqrt(dt)
+            sqrt_dx = np.sqrt(self.dx)
+            
+            print("\nRunning spatial simulation...")
+            for i in tqdm(range(nt - 1)):
+                # Diffusion
+                N_diff = D_matrix * (np.roll(N[i, :], 1) - 2*N[i, :] + 
+                                     np.roll(N[i, :], -1))
+                
+                # Reaction
+                f_R = R[i, :] / (self.H + R[i, :])
+                N_reaction = N[i, :] * (f_R - self.m)
+                R_reaction = self.r * R[i, :] * (1 - R[i, :]/self.K) - \
+                            self.q * f_R * N[i, :]
+                
+                # Noise
+                noise_N = self.sigma * N[i, :] * np.random.randn(self.Nx) / sqrt_dx
+                
+                # Update
+                N[i+1, :] = N[i, :] + dt * (N_diff + N_reaction) + sqrt_dt * noise_N
+                R[i+1, :] = R[i, :] + dt * R_reaction
+                
+                # Positivity
+                N[i+1, :] = np.maximum(N[i+1, :], 0)
+                R[i+1, :] = np.maximum(R[i+1, :], 0)
+            
+            return self.x, np.linspace(0, T, nt), N, R
+    
+    # Initialize
+    model = SpatialModel(L=100, Nx=Nx, D=D)
+    
+    # Initial conditions
+    def N0(x):
+        return 50 * np.exp(-((x - 50)**2) / 100)
+    
+    def R0(x):
+        return 80 * np.ones_like(x)
+    
+    # Simulate
+    x, t, N, R = model.simulate(N0, R0, T=T, dt=0.01)
+    
+    # Plot spatiotemporal evolution
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    im1 = axes[0].imshow(N.T, aspect='auto', origin='lower',
+                         extent=[t[0], t[-1], x[0], x[-1]],
+                         cmap='hot', interpolation='bilinear')
+    axes[0].set_xlabel('Time', fontsize=12)
+    axes[0].set_ylabel('Space', fontsize=12)
+    axes[0].set_title('Population N(x,t)', fontweight='bold', fontsize=13)
+    plt.colorbar(im1, ax=axes[0], label='N')
+    
+    im2 = axes[1].imshow(R.T, aspect='auto', origin='lower',
+                         extent=[t[0], t[-1], x[0], x[-1]],
+                         cmap='viridis', interpolation='bilinear')
+    axes[1].set_xlabel('Time', fontsize=12)
+    axes[1].set_ylabel('Space', fontsize=12)
+    axes[1].set_title('Resource R(x,t)', fontweight='bold', fontsize=13)
+    plt.colorbar(im2, ax=axes[1], label='R')
+    
+    plt.tight_layout()
+    plt.savefig('sim7_spatial_evolution.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Plot spatial averages
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    N_mean = np.mean(N, axis=1)
+    N_std = np.std(N, axis=1)
+    
+    ax.plot(t, N_mean, 'b-', linewidth=2.5, label='Mean N(t)')
+    ax.fill_between(t, N_mean - N_std, N_mean + N_std,
+                     alpha=0.3, color='blue', label='±1 SD (spatial)')
+    
+    ax.set_xlabel('Time', fontsize=12)
+    ax.set_ylabel('Spatial Average N(t)', fontsize=12)
+    ax.set_title('Spatially Averaged Population', fontweight='bold', fontsize=13)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('sim7_spatial_average.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"Final spatial mean: {N_mean[-1]:.2f}")
+    print(f"Final spatial std: {N_std[-1]:.2f}")
+    print(f"\nSaved: sim7_spatial_evolution.png, sim7_spatial_average.png")
+
+
+# ============================================================================
+# SIMULATION 8: EXTINCTION PHASE DIAGRAM (2D Heatmap)
+# Runtime: ~10-20 minutes (reduced parameter grid for speed)
+# ============================================================================
+
+def simulation_8_phase_diagram(n_sigma=8, n_m=8, n_trajectories=300):
+    """
+    2D phase diagram of extinction probability over (σ, m) parameter space
+    
+    Parameters:
+    -----------
+    n_sigma : int (default=8) - number of sigma values
+    n_m : int (default=8) - number of mortality values
+    n_trajectories : int (default=300) - trajectories per parameter pair
+    
+    Runtime: ~10-20 minutes (64 parameter combinations × 300 trajectories)
+    Output: 1 heatmap figure
+    """
+    print("\n" + "="*70)
+    print("SIMULATION 8: Extinction Phase Diagram")
+    print("="*70)
+    print(f"Grid: {n_sigma}×{n_m} = {n_sigma*n_m} parameter combinations")
+    print(f"Trajectories per combination: {n_trajectories}")
+    print(f"Total simulations: {n_sigma*n_m*n_trajectories}")
+    
+    sigma_range = np.linspace(0.05, 0.4, n_sigma)
+    m_range = np.linspace(0.1, 0.4, n_m)
+    
+    extinction_matrix = np.zeros((n_m, n_sigma))
+    
+    total = n_sigma * n_m
+    count = 0
+    
+    for i, m in enumerate(m_range):
+        for j, sigma in enumerate(sigma_range):
+            count += 1
+            print(f"\n[{count}/{total}] Testing σ={sigma:.3f}, m={m:.3f}...")
+            
+            model = StochasticTillman(sigma=sigma, m=m)
+            extinctions = 0
+            
+            for _ in tqdm(range(n_trajectories), desc="Trajectories", leave=False):
+                t, N, R = model.milstein(50, 50, T=500, dt=0.01)
+                if np.any(N < 1):
+                    extinctions += 1
+            
+            extinction_matrix[i, j] = extinctions / n_trajectories
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(11, 9))
+    
+    im = ax.imshow(extinction_matrix, aspect='auto', origin='lower',
+                   extent=[sigma_range[0], sigma_range[-1],
+                          m_range[0], m_range[-1]],
+                   cmap='RdYlBu_r', vmin=0, vmax=1)
+    
+    # Analytical threshold
+    H, K = 10, 100
+    R_star = 30
+    threshold_m = (R_star / (H + R_star)) - sigma_range**2 / 2
+    ax.plot(sigma_range, threshold_m, 'k--', linewidth=3,
+            label='Analytical threshold (approx.)')
+    
+    ax.set_xlabel('Noise Intensity (σ)', fontsize=13)
+    ax.set_ylabel('Mortality Rate (m)', fontsize=13)
+    ax.set_title('Extinction Probability Phase Diagram',
+                 fontsize=15, fontweight='bold')
+    ax.legend(fontsize=11)
+    
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Extinction Probability', fontsize=12)
+    
+    plt.tight_layout()
+    plt.savefig('sim8_phase_diagram.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"\n✓ Simulation complete!")
+    print(f"\nSaved: sim8_phase_diagram.png")
+
+
+# ============================================================================
+# QUICK REFERENCE GUIDE
+# ============================================================================
+
+def print_menu():
+    """Print menu of available simulations"""
+    print("\n" + "="*70)
+    print("AVAILABLE SIMULATIONS")
+    print("="*70)
+    print("\n1. simulation_1_demo()")
+    print("   Runtime: ~30 seconds")
+    print("   Output: Single trajectory comparison\n")
+    
+    print("2. simulation_2_ensemble(n_trajectories=100)")
+    print("   Runtime: ~2-3 minutes")
+    print("   Output: Ensemble statistics\n")
+    
+    print("3. simulation_3_extinction(n_sigma=10, n_trajectories=500)")
+    print("   Runtime: ~3-5 minutes")
+    print("   Output: Extinction probability curve\n")
+    
+    print("4. simulation_4_moments(sigma_values=[0.05, 0.1, 0.2, 0.3])")
+    print("   Runtime: ~5-8 minutes")
+    print("   Output: Moment evolution plots\n")
+    
+    print("5. simulation_5_two_species(n_trajectories=5)")
+    print("   Runtime: ~2-3 minutes")
+    print("   Output: Two-species competition\n")
+    
+    print("6. simulation_6_convergence(n_dt_values=6)")
+    print("   Runtime: ~4-6 minutes")
+    print("   Output: Convergence analysis\n")
+    
+    print("7. simulation_7_spatial(Nx=256)")
+    print("   Runtime: ~8-12 minutes")
+    print("   Output: Spatial SPDE simulation\n")
+    
+    print("8. simulation_8_phase_diagram(n_sigma=8, n_m=8)")
+    print("   Runtime: ~10-20 minutes")
+    print("   Output: 2D extinction phase diagram\n")
+    
+    print("="*70)
+    print("\nExample usage:")
+    print("  simulation_1_demo()  # Quick start")
+    print("  simulation_3_extinction(n_sigma=15, n_trajectories=1000)  # Custom params")
+    print("="*70)
+
+
+# Print menu on import
+print_menu()
